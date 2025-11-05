@@ -1,0 +1,9 @@
+
+train:
+  - "./images/train/1"
+val: "./images/val/2" 
+names:
+  0: "dendo"
+  1: "denxanh"
+  2: "oto"
+  3: "xemay"

@@ -23,16 +23,12 @@ out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 save_dir = "violations"
 os.makedirs(save_dir, exist_ok=True)
 
-# ==== Định nghĩa vùng ====
-stop_line_y = 265
-right_lane_upper_y = 150
-
 # --- Vùng vi phạm (vùng đi thẳng) ---
 violation_zone_points = np.array([
     [380, 120],
     [560, 120],
-    [640, 235],
-    [260, 240]
+    [640, 270],
+    [260, 275]
 ])
 polygon_violation = Polygon(violation_zone_points)
 
@@ -84,7 +80,6 @@ for results in tracker:
     # === Vẽ vùng ===
     cv2.polylines(annotated, [violation_zone_points], True, (0, 255, 255), 2)
     cv2.polylines(annotated, [right_lane_points], True, (0, 200, 0), 2)
-    cv2.line(annotated, (250, stop_line_y), (650, stop_line_y), (0, 255, 255), 2)
 
     # === Xử lý từng xe ===
     for box, cls_id, track_id in zip(boxes, cls_ids, ids):
@@ -159,8 +154,8 @@ for results in tracker:
 
         # Vẽ khung
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(annotated, f"{label} #{track_id} ({direction})", (x1, y1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        #cv2.putText(annotated, f"{label} #{track_id} ({direction})", (x1, y1 - 5),
+                   # cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
     # === Hiển thị đèn ===
     cv2.putText(annotated, f"LIGHT: {current_light.upper()}",

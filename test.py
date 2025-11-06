@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 import cv2
 
 # 1️⃣ Tải mô hình YOLO
-model = YOLO("D:\\Hocmay\\yolo_results\\arrow_detection\\weights\\best.pt")
+model = YOLO("D:\\Hocmay\\yolo_results_1\\arrow_detection\\weights\\best.pt")
 
 # 2️⃣ Đọc ảnh cần nhận diện
-image_path = "D:\\Hocmay\\z7146913144441_79137576dda2a101e99a064da1f71480.jpg"
+image_path = "D:\\Hocmay\\image.png"
 
 # 3️⃣ Thực hiện dự đoán
 results = model.predict(source=image_path, conf=0.25)

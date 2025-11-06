@@ -2,10 +2,10 @@ from ultralytics import YOLO
 import cv2
 
 # 1️⃣ Load mô hình YOLO
-model = YOLO("D:\\Hocmay\\yolo_results\\arrow_detection\\weights\\best.pt")
+model = YOLO("D:\\Hocmay\\yolo_results_1\\arrow_detection\\weights\\best.pt")
 
 # 2️⃣ Đường dẫn video đầu vào
-video_path = "D:\\Hocmay\\7149539038243.mp4"  # đổi thành video của bạn
+video_path = "D:\\Hocmay\\7170714254787.mp4"  # đổi thành video của bạn
 cap = cv2.VideoCapture(video_path)
 
 # 3️⃣ Cấu hình output video (nếu muốn lưu kết quả)

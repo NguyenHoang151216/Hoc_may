@@ -133,10 +133,10 @@ for results in tracker:
             # Nếu xe từng nằm trong làn phải
             in_right_lane_before = any(polygon_right_lane.contains(Point(x, y)) for x, y in history[:-2])
 
-            # 🚫 Vi phạm chỉ khi:
-            # 1️⃣ Xe đi theo hướng hợp lệ (từ dưới lên)
-            # 2️⃣ Xe không được phép vào vùng vi phạm sau khi đèn đỏ
-            # 3️⃣ Xe không còn trong làn phải
+            #Vi phạm chỉ khi:
+            #Xe đi theo hướng hợp lệ (từ dưới lên)
+            #Xe không được phép vào vùng vi phạm sau khi đèn đỏ
+            #Xe không còn trong làn phải
             if direction == "up":
                 if in_violation_zone_now and not entered_before_red:
                     if not in_right_lane_now and not in_right_lane_before:

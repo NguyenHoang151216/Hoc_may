@@ -5,7 +5,7 @@ import cv2
 model = YOLO("D:\\Hocmay\\yolo_results_1\\arrow_detection\\weights\\best.pt")
 
 # 2️⃣ Đường dẫn video đầu vào
-video_path = "D:\\Hocmay\\7170714254787.mp4"  # đổi thành video của bạn
+video_path = "D:\\Hocmay\\7170714254787.mp4"
 cap = cv2.VideoCapture(video_path)
 
 # 3️⃣ Cấu hình output video (nếu muốn lưu kết quả)

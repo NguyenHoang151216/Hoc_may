@@ -133,6 +133,7 @@ for results in tracker:
             in_violation_zone_now = polygon_violation.contains(bottom_point)
             in_right_lane_before = any(polygon_right_lane.contains(Point(x, y)) for x, y in history[:-2])
 
+
             if direction == "up":
                 if in_violation_zone_now and not entered_before_red:
                     if not in_right_lane_now and not in_right_lane_before:

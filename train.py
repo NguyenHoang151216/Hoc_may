@@ -7,5 +7,5 @@ if __name__ == "__main__":
         batch=16,
         epochs=15,
         imgsz=768,
-        device=0   # dùng GPU, nếu muốn CPU thì device="cpu"
+        device=0  
     )

@@ -7,6 +7,11 @@ import numpy as np
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Tuple, Dict, List
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import threading
+from tkinter import ttk  # For scrollbar support
+from PIL import Image, ImageTk
 
 try:
     from ultralytics import YOLO
@@ -14,8 +19,8 @@ except Exception as e:
     raise RuntimeError("Missing ultralytics. Install with: pip install ultralytics") from e
 
 CONFIG = {
-    "yolo_weights": "D:\\Hocmay\\yolo_results_2\\arrow_detection\\weights\\best.pt",
-    "yolo_weights1": "D:\\Hocmay\\yolo_results_3\\arrow_detection\\weights\\best.pt",
+    "yolo_weights": r".\phuongtien\arrow_detection\weights\best.pt",
+    "yolo_weights1": r".\yolo_results_3\arrow_detection\weights\best.pt",
     "vehicle_classes": ["oto", "xemay"],
     "left_light_green_names": ["dentrai_xanh"],
     "left_light_red_names": ["dentrai_do"],
@@ -212,6 +217,7 @@ class DetectorTracker:
                         except Exception:
                             tid = None
                     class_name = names_map.get(cls_idx, str(cls_idx)).lower()
+
                     outs.append({
                         "track_id": tid,
                         "class_name": class_name,
@@ -394,9 +400,21 @@ class RuleEngine:
                 if seg_intersect(seg0, seg1, self.edges['left'][0], self.edges['left'][1]):
                     if ts.waitingleft and not ts.violation_logged:
                         if ts.entry_left_is_red:
-                            rec = self._log_violation(ts, d, frame, frame_idx, reason="cross_left_while_waitingleft")
+                            rec = self._log_violation(
+                                ts,
+                                d,
+                                frame,
+                                frame_idx,
+                                reason="cross_left_while_waitingleft"
+                            )
+
                             if rec:
                                 violations.append(rec)
+
+                                # ===== BÁO REALTIME CHO GUI =====
+                                if hasattr(self, "on_violation") and self.on_violation:
+                                    self.on_violation(rec)
+
                         else:
                             ts.waitingleft = False
                             ts.entry_left_is_red = False
@@ -406,10 +424,22 @@ class RuleEngine:
                     continue
                 if seg_intersect(seg0, seg1, self.edges['top'][0], self.edges['top'][1]):
                     if ts.waitingright and not ts.violation_logged:
-                        if ts.entry_right_is_red:
-                            rec = self._log_violation(ts, d, frame, frame_idx, reason="cross_top_while_waitingright")
+                        if ts.entry_left_is_red:
+                            rec = self._log_violation(
+                                ts,
+                                d,
+                                frame,
+                                frame_idx,
+                                reason="cross_left_while_waitingleft"
+                            )
+
                             if rec:
                                 violations.append(rec)
+
+                                # ===== BÁO REALTIME CHO GUI =====
+                                if hasattr(self, "on_violation") and self.on_violation:
+                                    self.on_violation(rec)
+
                         else:
                             ts.waitingright = False
                             ts.entry_right_is_red = False
@@ -425,310 +455,645 @@ class RuleEngine:
         return violations
 
     def _log_violation(self, ts: TrackState, det: dict, frame, frame_idx: int, reason: str):
-        if self.cfg["log_once_per_track"] and ts.violation_logged:
+        # ===== CHẶN GHI NHIỀU LẦN CHO CÙNG 1 TRACK =====
+        if ts.violation_logged:
             return None
+
+        # ===== ĐÁNH DẤU ĐÃ VI PHẠM NGAY LẬP TỨC =====
         ts.violation_logged = True
-        x1, y1, x2, y2 = det["bbox"]
-        w = x2 - x1
-        h = y2 - y1
-        margin = self.cfg["snapshot_margin"]
-        x1m = max(0, int(x1 - w * margin))
-        y1m = max(0, int(y1 - h * margin))
-        x2m = min(frame.shape[1], int(x2 + w * margin))
-        y2m = min(frame.shape[0], int(y2 + h * margin))
-        crop = frame[y1m:y2m, x1m:x2m].copy() if frame is not None else None
+
+        # ===== TẠO RECORD VI PHẠM =====
         ts_record = {
             "track_id": ts.track_id,
             "frame_idx": frame_idx,
             "timestamp": time.time(),
             "reason": reason,
-            "bbox": [x1, y1, x2, y2],
-            "crop_bbox": [x1m, y1m, x2m, y2m],
+            "bbox": det["bbox"],
             "class_name": det["class_name"],
-            "conf": det["conf"]
+            "conf": det["conf"],
+            "image_path": None
         }
-        if self.cfg["save_violation_images"] and crop is not None:
-            out_dir = os.path.join(self.cfg.get("output_dir", "./out"), "viol_images")
-            os.makedirs(out_dir, exist_ok=True)
-            fname = f"{self.cfg.get('violation_image_prefix','viol')}_t{ts.track_id}_f{frame_idx}.jpg"
-            fpath = os.path.join(out_dir, fname)
-            cv2.imwrite(fpath, crop)
-            ts_record["image_path"] = fpath
+
+        # ===== LƯU ẢNH VI PHẠM (CHỈ 1 LẦN) =====
+        if self.cfg.get("save_violation_images", True):
+            os.makedirs("output", exist_ok=True)
+
+            x1, y1, x2, y2 = map(int, det["bbox"])
+            crop = frame[y1:y2, x1:x2]
+
+            filename = f"output/track_{ts.track_id}_{int(time.time())}.jpg"
+
+            if crop.size > 0:
+                cv2.imwrite(filename, crop)
+                ts_record["image_path"] = filename
+
         if self.cfg.get("show_debug_prints"):
-            print(f"[VIOL] id={ts.track_id} frame={frame_idx} reason={reason} saved={ts_record.get('image_path')}")
+            print(f"[VIOL] id={ts.track_id} frame={frame_idx} reason={reason}")
+
         return ts_record
 
-# ---------------------------
-# INTERACTIVE POLYGON DRAWING
-# ---------------------------
-class PolygonDrawer:
-    def __init__(self, frame):
-        self.frame = frame.copy()
-        self.display = frame.copy()
-        self.points = []
 
-    def mouse_callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.points.append((x, y))
-            cv2.circle(self.display, (x, y), 5, (0, 255, 0), -1)
-            cv2.circle(self.display, (x, y), 5, (255, 255, 255), 1)
-            if len(self.points) > 1:
-                cv2.line(self.display, self.points[-2], self.points[-1], (0, 255, 0), 2)
-            print(f"Point {len(self.points)} added: {(x, y)}")
 
-    def draw_polygon(self):
-        window_name = "Draw Polygon - Click to add points, SPACE to finish, R to reset"
-        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
-        cv2.setMouseCallback(window_name, self.mouse_callback)
 
-        print("\n" + "="*60)
-        print("INTERACTIVE POLYGON DRAWING")
-        print("="*60)
-        print("Instructions:")
-        print("  - Click to add polygon points (minimum 3 points)")
-        print("  - Press SPACE when done")
-        print("  - Press R to reset all points")
-        print("  - Press Q to cancel and use default polygon")
-        print("="*60 + "\n")
+class TrafficViolationApp:
 
-        while True:
-            self.display = self.frame.copy()
-            for i, pt in enumerate(self.points):
-                cv2.circle(self.display, pt, 5, (0, 255, 0), -1)
-                cv2.circle(self.display, pt, 5, (255, 255, 255), 1)
-                cv2.putText(self.display, str(i+1), (pt[0]+10, pt[1]), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+
+    def clear_polygon(self):
+        # Xóa đường polygon
+        for l in self.polygon_lines:
+            self.video_canvas.delete(l)
+
+        # Xóa chấm đỏ
+        for d in self.polygon_dots:
+            self.video_canvas.delete(d)
+
+        self.polygon_lines.clear()
+        self.polygon_dots.clear()
+        self.polygon_points.clear()
+
+
+
+    def canvas_to_frame(self, x, y):
+        if self.current_frame is None:
+            return None
+
+        fh, fw = self.current_frame.shape[:2]
+        cw = self.video_canvas.winfo_width()
+        ch = self.video_canvas.winfo_height()
+
+        scale_x = fw / cw
+        scale_y = fh / ch
+
+        xf = int(x * scale_x)
+        yf = int(y * scale_y)
+        return (xf, yf)
+
+
+    def frame_to_canvas(self, x, y):
+        if self.current_frame is None:
+            return None
+
+        fh, fw = self.current_frame.shape[:2]
+        cw = self.video_canvas.winfo_width()
+        ch = self.video_canvas.winfo_height()
+
+        scale_x = cw / fw
+        scale_y = ch / fh
+
+        xc = int(x * scale_x)
+        yc = int(y * scale_y)
+        return (xc, yc)
+
+
+    def on_canvas_click(self, event):
+        if not self.drawing_enabled:
+            return
+
+        if len(self.polygon_points) >= 4:
+            return
+
+        # ===== 1. Lấy tọa độ click trên CANVAS =====
+        x_canvas, y_canvas = event.x, event.y
+
+        # ===== 2. Convert CANVAS → FRAME =====
+        pt_frame = self.canvas_to_frame(x_canvas, y_canvas)
+        if pt_frame is None:
+            return
+
+        # ===== 3. LƯU polygon theo FRAME (RẤT QUAN TRỌNG) =====
+        self.polygon_points.append(pt_frame)
+
+        # ===== 4. Convert ngược FRAME → CANVAS để VẼ =====
+        pt_canvas = self.frame_to_canvas(pt_frame[0], pt_frame[1])
+        x, y = pt_canvas
+
+        # ===== 5. VẼ ĐIỂM =====
+        r = 4
+        dot = self.video_canvas.create_oval(
+            x - r, y - r, x + r, y + r,
+            fill="red", outline="white"
+        )
+        self.polygon_dots.append(dot)
+
+
+        # ===== 6. VẼ CẠNH =====
+        if len(self.polygon_points) > 1:
+            x1f, y1f = self.polygon_points[-2]
+            x1c, y1c = self.frame_to_canvas(x1f, y1f)
+
+            line = self.video_canvas.create_line(
+                x1c, y1c, x, y, fill="yellow", width=2
+            )
+            self.polygon_lines.append(line)
+
+        # ===== 7. ĐÓNG POLYGON =====
+        if len(self.polygon_points) == 4:
+            x0f, y0f = self.polygon_points[0]
+            x0c, y0c = self.frame_to_canvas(x0f, y0f)
+
+            line = self.video_canvas.create_line(
+                x, y, x0c, y0c, fill="yellow", width=2
+            )
+            self.polygon_lines.append(line)
+
+    def _open_full_image(self, image_path):
+        win = tk.Toplevel(self.root)
+        win.title(os.path.basename(image_path))
+
+        img = Image.open(image_path)
+
+        screen_w = win.winfo_screenwidth() - 100
+        screen_h = win.winfo_screenheight() - 100
+
+        w, h = img.size
+        scale = min(screen_w / w, screen_h / h)
+
+        new_size = (int(w * scale), int(h * scale))
+        img = img.resize(new_size, Image.LANCZOS)
+
+        tk_img = ImageTk.PhotoImage(img)
+
+        lbl = tk.Label(win, image=tk_img)
+        lbl.image = tk_img
+        lbl.pack(expand=True)
+
+
+    def enable_draw(self):
+        self.clear_polygon()
+        self.drawing_enabled = True
+        self.btn_draw.pack(side=tk.LEFT, padx=5)
+        self.btn_confirm.pack(side=tk.LEFT, padx=5)
+
+    def on_polygon_confirmed(self):
+        self.state = "POLYGON_CONFIRMED"
+        self.drawing_enabled = False
+
+        self.btn_draw.pack_forget()
+        self.btn_confirm.pack_forget()
+        self.btn_skip.pack_forget()
+
+        self.process_button.config(state=tk.NORMAL)
+
+    
+    
+    def draw_polygon_on_canvas(self, points):
+        self.clear_polygon()
+        self.polygon_points = points
+
+        for i in range(len(points)):
+            # ===== FRAME → CANVAS =====
+            x1f, y1f = points[i]
+            x2f, y2f = points[(i + 1) % len(points)]
+
+            x1c, y1c = self.frame_to_canvas(x1f, y1f)
+            x2c, y2c = self.frame_to_canvas(x2f, y2f)
+
+            line = self.video_canvas.create_line(
+                x1c, y1c, x2c, y2c,
+                fill="yellow", width=2
+            )
+            self.polygon_lines.append(line)
+
+
+    def _build_gallery_window(self, image_paths):
+        win = tk.Toplevel(self.root)
+        win.title("Ảnh vi phạm")
+        win.geometry("800x600")
+
+        canvas = tk.Canvas(win)
+        scrollbar = ttk.Scrollbar(win, orient=tk.VERTICAL, command=canvas.yview)
+        scroll_frame = tk.Frame(canvas)
+
+        scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # giữ reference ảnh (RẤT QUAN TRỌNG)
+        self.gallery_thumbs = []
+
+        cols = 4
+        size = (180, 120)
+
+        for idx, img_path in enumerate(image_paths):
+            try:
+                img = Image.open(img_path)
+                img.thumbnail(size)
+                tk_img = ImageTk.PhotoImage(img)
+
+                lbl = tk.Label(scroll_frame, image=tk_img, cursor="hand2", bd=2, relief=tk.RIDGE)
+                lbl.image = tk_img
+                self.gallery_thumbs.append(tk_img)
+
+                lbl.grid(row=idx // cols, column=idx % cols, padx=10, pady=10)
+                lbl.bind("<Button-1>", lambda e, p=img_path: self._open_full_image(p))
+
+            except Exception as e:
+                print("Không load được ảnh:", img_path, e)
+
+
+    def confirm_polygon(self):
+        if len(self.polygon_points) != 4:
+            messagebox.showerror("Lỗi", "Cần đúng 4 điểm")
+            return
+
+        from db.repository import PolygonRepository
+        repo = PolygonRepository()
+        repo.save_polygon(self.video_path, self.polygon_points)
+
+        self.on_polygon_confirmed()
+
+
+    def show_frame_on_canvas(self, frame):
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_rgb)
+
+        canvas_w = self.video_canvas.winfo_width()
+        canvas_h = self.video_canvas.winfo_height()
+
+        img = img.resize((canvas_w, canvas_h))
+        self.tk_img = ImageTk.PhotoImage(img)
+
+        self.video_canvas.delete("all")
+        self.canvas_image_id = self.video_canvas.create_image(
+            0, 0, anchor=tk.NW, image=self.tk_img
+        )
+
+
+    def open_violation_gallery(self):
+        output_dir = r".\output"
+
+        if not os.path.exists(output_dir):
+            messagebox.showerror("Lỗi", "Chưa có thư mục output")
+            return
+
+        image_files = [
+            os.path.join(output_dir, f)
+            for f in os.listdir(output_dir)
+            if f.lower().endswith((".jpg", ".png", ".jpeg"))
+        ]
+
+        if not image_files:
+            messagebox.showinfo("Thông báo", "Chưa có ảnh vi phạm")
+            return
+
+        self._build_gallery_window(image_files)
+
+    def show_polygon_options(self):
+        self.btn_draw.pack(side=tk.LEFT, padx=5)
+        self.btn_skip.pack(side=tk.LEFT, padx=5)
+
+    def show_draw_button(self):
+        self.btn_draw.pack(side=tk.LEFT, padx=5)
+
+    def run_model(self):
+        if self.state != "POLYGON_CONFIRMED":
+            messagebox.showerror("Lỗi", "Chưa xác nhận polygon")
+            return
+        
+        self.state = "PROCESSING"
+
+        self.cap = cv2.VideoCapture(self.video_path)
+
+        cfg = dict(CONFIG)
+        cfg["zone_polygon"] = self.polygon_points
+
+        self.detector = DetectorTracker(cfg)
+        self.engine = RuleEngine(cfg)
+        self.engine.on_violation = self._on_violation
+
+        self.frame_idx = 0
+        self.running = True
+
+        self.process_next_frame()
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Traffic Violation Detection")
+        self.root.geometry("600x400")  # Adjusted size since image display is removed
+        # Canvas hiển thị video
+        self.video_canvas = tk.Canvas(root, width=800, height=450, bg="black")
+        self.video_canvas.pack(padx=10, pady=10)
+
+        
+        self.canvas_image_id = None
+        self.current_frame = None
+        self.polygon_points = []
+        self.polygon_lines = []
+        self.polygon_dots = []   # <-- THÊM DÒNG NÀY
+
+        self.has_polygon_db = False
+
+        self.video_path = None
+        self.violations = []  # To store detected violations
+
+        self.btn_frame = tk.Frame(root)
+        self.btn_frame.pack(pady=5)
+
+        self.btn_draw = tk.Button(self.btn_frame, text="Vẽ polygon", command=self.enable_draw)
+        self.btn_skip = tk.Button(
+            self.btn_frame,
+            text="Không vẽ lại",
+            command=self.on_polygon_confirmed
+        )
+
+#
+        self.video_canvas.bind("<Button-1>", self.on_canvas_click)
+        self.drawing_enabled = False
+
+        self.btn_confirm = tk.Button(
+            self.btn_frame,
+            text="Xác nhận polygon",
+            command=self.confirm_polygon
+        )
+
+        self.cap = None
+        self.detector = None
+        self.engine = None
+        self.frame_idx = 0
+        self.running = False
+
+        # UI Elements
+        self.label = tk.Label(root, text="Traffic Violation Detection System", font=("Arial", 14))
+        self.label.pack(pady=10)
+
+        self.select_button = tk.Button(root, text="Select Video", command=self.select_video, width=20)
+        self.select_button.pack(pady=10)
+
+        self.process_button = tk.Button(
+            self.btn_frame,
+            text="Process Video",
+            state=tk.DISABLED,
+            command=self.run_model
+        )
+
+        self.btn_open_images = tk.Button(
+            self.btn_frame,
+            text="Mở ảnh vi phạm",
+            command=self.open_violation_gallery
+        )
+        self.btn_open_images.pack(side=tk.LEFT, padx=5)
+
+
+        self.process_button.pack(pady=10)
+
+        self.status_label = tk.Label(root, text="Status: Waiting for input", font=("Arial", 10))
+        self.status_label.pack(pady=10)
+
+        # Frame for violations list
+        self.main_frame = tk.Frame(root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Listbox for violations
+        self.violations_label = tk.Label(self.main_frame, text="Detected Violations", font=("Arial", 12))
+        self.violations_label.pack(side=tk.LEFT, anchor="n", padx=10)
+
+        self.violations_listbox = tk.Listbox(self.main_frame, width=40, height=20)
+        self.violations_listbox.pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        # Add a scrollbar to the listbox
+        self.scrollbar = ttk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.violations_listbox.yview)
+        self.scrollbar.pack(side=tk.LEFT, fill=tk.Y)
+        self.violations_listbox.config(yscrollcommand=self.scrollbar.set)
+        # Make violations clickable: double-click to open saved image (if available)
+        self.violations_listbox.bind("<Double-Button-1>", self.on_violation_double_click)
+
+        # ===== STATE =====
+        self.state = "INIT"   # INIT | VIDEO_SELECTED | POLYGON_CONFIRMED | PROCESSING
+
+    def select_video(self):
+
+        # ===== STOP ANY RUNNING VIDEO =====
+        if self.running:
+            self.running = False
+
+        if self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            self.cap = None
+
+        # reset engine
+        self.detector = None
+        self.engine = None
+        self.frame_idx = 0
+
+        # reset UI state
+        self.state = "INIT"
+        self.process_button.config(state=tk.DISABLED)
+
+        file_path = filedialog.askopenfilename(
+            title="Select Video",
+            filetypes=[("Video Files", "*.mp4 *.avi *.mov")]
+        )
+
+
+        # ===== RESET FOR NEW VIDEO =====
+        self.polygon_points = []
+        self.polygon_lines = []
+        self.clear_polygon()
+
+        self.has_polygon_db = False
+        self.state = "INIT"
+
+        self.process_button.config(state=tk.DISABLED)
+
+        if not file_path:
+            return
+
+        self.video_path = file_path
+
+
+        # 1️⃣ Open video
+        self.cap = cv2.VideoCapture(self.video_path)
+        ret, frame = self.cap.read()
+        if not ret:
+            messagebox.showerror("Lỗi", "Không đọc được frame đầu")
+            return
+
+        # 2️⃣ Hiển thị frame đầu lên Canvas
+        self.current_frame = frame
+        self.show_frame_on_canvas(frame)
+
+        # ============================
+        # 3️⃣ CHÈN ĐOẠN BẠN HỎI VÀO ĐÂY
+        # ============================
+
+        from db.repository import PolygonRepository
+        repo = PolygonRepository()
+
+        polygon = repo.get_polygon_by_video(self.video_path)
+
+        self.state = "VIDEO_SELECTED"
+        self.process_button.config(state=tk.DISABLED)
+        self.btn_draw.pack_forget()
+        self.btn_skip.pack_forget()
+
+        if polygon:
+            self.draw_polygon_on_canvas(polygon)
+
+            answer = messagebox.askyesno(
+                "Polygon đã tồn tại",
+                "Video này đã có polygon.\nBạn có muốn vẽ lại polygon không?"
+            )
+
+            if answer:
+                self.enable_draw()
+            else:
+                self.polygon_points = polygon
+                self.on_polygon_confirmed()
+
+
+        else:
             
-            for i in range(1, len(self.points)):
-                cv2.line(self.display, self.points[i-1], self.points[i], (0, 255, 0), 2)
+            self.enable_draw()
+
             
-            info_text = f"Points: {len(self.points)} | Press SPACE to finish, R to reset, Q to cancel"
-            cv2.putText(self.display, info_text, (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            cv2.imshow(window_name, self.display)
-            key = cv2.waitKey(50) & 0xFF
 
-            if key == ord(' '):
-                if len(self.points) >= 3:
-                    cv2.line(self.display, self.points[-1], self.points[0], (0, 255, 0), 2)
-                    print(f"\n✓ Polygon created with {len(self.points)} points!")
-                    print(f"Polygon points: {self.points}\n")
-                    cv2.imshow(window_name, self.display)
-                    cv2.waitKey(1000)
-                    break
-                else:
-                    print("✗ Need at least 3 points! Current: " + str(len(self.points)))
-
-            elif key == ord('r') or key == ord('R'):
-                self.points = []
-                print("→ Reset: All points cleared")
-
-            elif key == ord('q') or key == ord('Q'):
-                self.points = []
-                print("→ Cancelled! Using default polygon")
-                break
-
-        cv2.destroyWindow(window_name)
-        return self.points
-
-def np_int_points(poly):
-    arr = np.array(poly, dtype=np.int32)
-    return arr.reshape((-1,1,2))
-
-def draw_polygon(img, poly, color=(0,255,255), thickness=2):
-    pts = np_int_points(poly)
-    cv2.polylines(img, [pts], isClosed=True, color=color, thickness=thickness)
-
-def get_box_color_and_thickness(d, engine: RuleEngine):
-    normal_color = (255,255,255)
-    light_color  = (0,200,255)
-    waiting_color= (0,255,255)
-    violation_color = (0,0,255)
-    cname = d.get("class_name","").lower()
-    tid = d.get("track_id", None)
-    if any(vc in cname for vc in engine.cfg["vehicle_classes"]):
-        if tid is not None and tid in engine.track_states:
-            ts = engine.track_states[tid]
-            if ts.violation_logged:
-                return violation_color, 3
-            if ts.waitingleft or ts.waitingright:
-                return waiting_color, 2
-        return normal_color, 1
-    else:
-        return light_color, 1
-
-def process_video(input_video: str, output_dir: str, cfg_override: dict = None):
-    cfg = dict(CONFIG)
-    if cfg_override:
-        cfg.update(cfg_override)
-    cfg["output_dir"] = output_dir
-    os.makedirs(output_dir, exist_ok=True)
-
-    dt = DetectorTracker(cfg)
-
-    cap = cv2.VideoCapture(input_video)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {input_video}")
-
-    ret, first_frame = cap.read()
-    if not ret:
-        raise RuntimeError("Cannot read first frame from video")
     
-    # Draw polygon interactively on first frame
-    drawer = PolygonDrawer(first_frame)
-    polygon_points = drawer.draw_polygon()
-    
-    # Update config with drawn polygon (or use default if cancelled)
-    if polygon_points and len(polygon_points) >= 3:
-        cfg["zone_polygon"] = polygon_points
-        print(f"Using custom polygon with points: {polygon_points}")
-    else:
-        print(f"Using default polygon: {CONFIG['zone_polygon']}")
-        cfg["zone_polygon"] = CONFIG["zone_polygon"]
-    
-    # Re-initialize RuleEngine with new polygon
-    engine = RuleEngine(cfg)
-    
-    frame_idx = 0
-    violations_all = []
-    print_det_n = cfg.get("print_detections_first_n_frames", 5)
 
-    # prepare video writer for visualization
-    write_viz = True
-    out_writer = None
-    if write_viz:
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        fps = cap.get(cv2.CAP_PROP_FPS) or 20.0
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        viz_path = os.path.join(output_dir, "out_viz.mp4")
-        out_writer = cv2.VideoWriter(viz_path, fourcc, fps, (w, h))
+    def _on_violation(self, viol: dict):
+        # This may be called from the processing thread; schedule update on main thread
+        try:
+            self.root.after(0, lambda: self._add_violation(viol))
+        except Exception:
+            # fallback: try direct add if after fails
+            try:
+                self._add_violation(viol)
+            except Exception:
+                pass
 
-    print("\nProcessing... (press 'q' in the display window to stop early)\n")
-    try:
-        # Process first frame
-        detections = dt.run_frame(first_frame)
-        if cfg.get("show_debug_prints") and frame_idx < print_det_n:
-            print(f"[DETS] frame={frame_idx} ->", [(d['class_name'], round(d['conf'],2), d['track_id']) for d in detections])
+    def _add_violation(self, viol: dict):
+        # Append to internal list and listbox
+        self.violations.append(viol)
+        summary = f"ID: {viol.get('track_id')}, Reason: {viol.get('reason')}"
+        self.violations_listbox.insert(tk.END, summary)
+        # Optional: auto-scroll to the latest entry
+        self.violations_listbox.yview_moveto(1.0)
 
-        violations = engine.process_frame(detections, first_frame, frame_idx)
-        for v in (violations or []):
-            if v:
-                violations_all.append(v)
+    def on_violation_double_click(self, event):
+        try:
+            sel = self.violations_listbox.curselection()
+            if not sel:
+                return
+            idx = sel[0]
+            viol = self.violations[idx]
+            img = viol.get("image_path")
+            if not img:
+                messagebox.showinfo("Thông báo", "Không có ảnh được lưu cho vi phạm này")
+                return
+            if not os.path.exists(img):
+                messagebox.showerror("Lỗi", f"Ảnh không tìm thấy: {img}")
+                return
+            self._open_full_image(img)
+        except Exception as e:
+            print("Error opening violation image:", e)
 
-        vis = first_frame.copy()
-        draw_polygon(vis, cfg["zone_polygon"], color=(0,255,255), thickness=2)
+    def process_next_frame(self):
+        if not self.running:
+            return
+
+        ret, frame = self.cap.read()
+        if not ret:
+            self.cap.release()
+            self.running = False
+            messagebox.showinfo("Done", "Video đã chạy xong")
+            return
+
+        detections = self.detector.run_frame(frame)
+        self.engine.process_frame(detections, frame, self.frame_idx)
+
+        vis = frame.copy()
+        self.draw_polygon_cv(vis, self.polygon_points)
 
         for d in detections:
-            x1,y1,x2,y2 = map(int, d["bbox"])
-            tid = d.get("track_id", None)
-            cname = d.get("class_name","")
-            color, thickness = get_box_color_and_thickness(d, engine)
-            cv2.rectangle(vis, (x1,y1),(x2,y2), color, thickness)
+            x1, y1, x2, y2 = map(int, d["bbox"])
+            tid = d.get("track_id")
 
-        if out_writer is not None:
-            out_writer.write(vis)
+            # ===== DEFAULT =====
+            color = (255, 255, 255)  # trắng
+            thickness = 2
 
-        frame_idx += 1
-        
-        # Process remaining frames
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            # ===== LẤY TRẠNG THÁI TRACK =====
+            if tid is not None and tid in self.engine.track_states:
+                ts = self.engine.track_states[tid]
 
-            detections = dt.run_frame(frame)
-            if cfg.get("show_debug_prints") and frame_idx < print_det_n:
-                print(f"[DETS] frame={frame_idx} ->", [(d['class_name'], round(d['conf'],2), d['track_id']) for d in detections])
+                if ts.violation_logged:
+                    color = (0, 0, 255)      # đỏ
+                    thickness = 3
+                elif ts.waitingleft or ts.waitingright:
+                    color = (0, 255, 255)    # vàng
+                    thickness = 3
 
-            violations = engine.process_frame(detections, frame, frame_idx)
-            for v in (violations or []):
-                if v:
-                    violations_all.append(v)
+            # ===== VẼ BOX =====
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, thickness)
 
-            vis = frame.copy()
-            draw_polygon(vis, cfg["zone_polygon"], color=(0,255,255), thickness=2)
+            label = d["class_name"]
+            if tid is not None:
+                label += f" ID:{tid}"
 
-            for d in detections:
-                x1,y1,x2,y2 = map(int, d["bbox"])
-                tid = d.get("track_id", None)
-                cname = d.get("class_name","")
-                color, thickness = get_box_color_and_thickness(d, engine)
-                cv2.rectangle(vis, (x1,y1),(x2,y2), color, thickness)
-                label_parts = [cname]
-                if tid is not None:
-                    label_parts.append(f"ID{tid}")
-                    ts = engine.track_states.get(tid)
-                    if ts:
-                        if ts.violation_logged:
-                            label_parts.append("VIOL")
-                        else:
-                            waiting_flags = []
-                            if ts.waitingleft:
-                                waiting_flags.append("WAIT_L")
-                            if ts.waitingright:
-                                waiting_flags.append("WAIT_R")
-                            if waiting_flags:
-                                label_parts.append("&".join(waiting_flags))
-                label = "|".join(label_parts)
-                (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-                cv2.rectangle(vis, (x1, max(0,y1-lh-8)), (x1 + lw + 6, y1), color, -1)
-                cv2.putText(vis, label, (x1 + 3, max(0, y1-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,0,0), 1)
+            cv2.putText(
+                vis,
+                label,
+                (x1, max(20, y1 - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                2
+            )
 
-                ts = engine.track_states.get(tid)
-                if ts:
-                    pts = list(ts.last_positions)
-                    for i in range(1, len(pts)):
-                        p1 = (int(pts[i-1][0]), int(pts[i-1][1]))
-                        p2 = (int(pts[i][0]), int(pts[i][1]))
-                        cv2.line(vis, p1, p2, (255,255,0), 1)
 
-            waiting_L_ids = [tid for tid,ts in engine.track_states.items() if ts.waitingleft]
-            waiting_R_ids = [tid for tid,ts in engine.track_states.items() if ts.waitingright]
-            viol_ids    = [tid for tid,ts in engine.track_states.items() if ts.violation_logged]
-            cv2.putText(vis, f"WAIT_L: {waiting_L_ids}", (10, vis.shape[0]-60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
-            cv2.putText(vis, f"WAIT_R: {waiting_R_ids}", (10, vis.shape[0]-40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
-            cv2.putText(vis, f"VIOL: {viol_ids}", (10, vis.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+        self.show_frame_on_canvas(vis)
 
-            ls = engine.light_state
-            left_status = "RED" if ls.left_is_red else "GREEN"
-            right_status = "RED" if ls.right_is_red else "GREEN"
-            tl_color = (0,0,255) if ls.left_is_red or ls.right_is_red else (0,255,0)
-            cv2.putText(vis, f"L:{left_status}  R:{right_status}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, tl_color, 2)
+        self.frame_idx += 1
+        self.root.after(15, self.process_next_frame)
 
-            cv2.imshow("Traffic Violation System - Press q to quit", vis)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                print("User requested stop (q pressed).")
-                break
+    def draw_polygon_cv(self, img, points):
+        if len(points) < 3:
+            return
+        pts = np.array(points, np.int32).reshape((-1,1,2))
+        cv2.polylines(img, [pts], True, (0,255,255), 2)
 
-            if out_writer is not None:
-                out_writer.write(vis)
 
-            frame_idx += 1
+     
 
-    finally:
-        cap.release()
-        if out_writer is not None:
-            out_writer.release()
-        cv2.destroyAllWindows()
+    def update_violations_list(self, violations):
+        """Update the violations listbox with detected violations."""
+        self.violations = violations
+        for violation in violations:
+            summary = f"ID: {violation['track_id']}, Reason: {violation['reason']}"
+            self.violations_listbox.insert(tk.END, summary)
 
-    out_json = os.path.join(output_dir, cfg["violation_json"])
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump([v for v in violations_all if v is not None], f, ensure_ascii=False, indent=2)
-    print(f"Done. Violations saved: {out_json}")
-    return out_json
+    
 
+    # # Remove the image saving functionality from the `_log_violation` method
+    # def _log_violation(self, ts: TrackState, det: dict, frame, frame_idx: int, reason: str):
+    #     if self.cfg["log_once_per_track"] and ts.violation_logged:
+    #         return None
+    #     ts.violation_logged = True
+    #     ts_record = {
+    #         "track_id": ts.track_id,
+    #         "frame_idx": frame_idx,
+    #         "timestamp": time.time(),
+    #         "reason": reason,
+    #         "bbox": det["bbox"],
+    #         "class_name": det["class_name"],
+    #         "conf": det["conf"]
+    #     }
+    #     if self.cfg.get("show_debug_prints"):
+    #         print(f"[VIOL] id={ts.track_id} frame={frame_idx} reason={reason}")
+    #     return ts_record
+
+# Main function to start the app
 if __name__ == "__main__":
-    input_video = r"D:\Hocmay\5.mp4"
-    output_dir = r".\output"
-
-    process_video(
-        input_video=input_video,
-        output_dir=output_dir,
-        cfg_override={
-            "yolo_weights": r"D:\\Hocmay\\yolo_results_2\\arrow_detection\\weights\\best.pt",
-            "yolo_weights1": r"D:\\Hocmay\\yolo_results_3\\arrow_detection\\weights\\best.pt",
-        }
-    )
+    root = tk.Tk()
+    app = TrafficViolationApp(root)
+    root.mainloop()

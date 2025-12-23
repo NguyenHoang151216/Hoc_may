@@ -1,0 +1,44 @@
+[
+  {
+    "track_id": 119,
+    "frame_idx": 1493,
+    "timestamp": 1766306110.3703825,
+    "reason": "cross_top_while_waitingright",
+    "bbox": [
+      460.255615234375,
+      102.7668228149414,
+      499.86248779296875,
+      198.0066375732422
+    ],
+    "crop_bbox": [
+      452,
+      83,
+      507,
+      217
+    ],
+    "class_name": "xemay",
+    "conf": 0.7554705142974854,
+    "image_path": ".\\output\\viol_images\\viol_t119_f1493.jpg"
+  },
+  {
+    "track_id": 127,
+    "frame_idx": 1787,
+    "timestamp": 1766306127.7955334,
+    "reason": "cross_top_while_waitingright",
+    "bbox": [
+      512.4629516601562,
+      103.92650604248047,
+      551.4224853515625,
+      197.47291564941406
+    ],
+    "crop_bbox": [
+      504,
+      85,
+      559,
+      216
+    ],
+    "class_name": "xemay",
+    "conf": 0.7178702354431152,
+    "image_path": ".\\output\\viol_images\\viol_t127_f1787.jpg"
+  }
+]

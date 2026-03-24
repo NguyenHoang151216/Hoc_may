@@ -923,10 +923,6 @@ class TrafficViolationApp:
         self.current_frame = frame
         self.show_frame_on_canvas(frame)
 
-        # ============================
-        # 3️⃣ CHÈN ĐOẠN BẠN HỎI VÀO ĐÂY
-        # ============================
-
         from db.repository import PolygonRepository
         repo = PolygonRepository()
 
